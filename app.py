@@ -471,8 +471,11 @@ def optimize_images():
 # -----------------------------
 root = TkinterDnD.Tk()
 
-icon = tk.PhotoImage(file=resource_path("icon.png"))
-root.iconphoto(True, icon)
+try:
+    icon = tk.PhotoImage(file=resource_path("icon.png"))
+    root.iconphoto(True, icon)
+except Exception:
+    pass
 
 root.title("Part Hive Image Optimizer")
 root.geometry("1180x820")

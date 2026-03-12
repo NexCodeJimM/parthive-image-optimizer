@@ -72,7 +72,7 @@ jobs:
 
       - name: Build macOS APP
         run: |
-          pyinstaller --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 app.py
+          pyinstaller --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 --add-data "icon.png:." app.py
 
       - name: Zip macOS app
         run: |
