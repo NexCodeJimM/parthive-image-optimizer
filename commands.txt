@@ -1,0 +1,2 @@
+Export:
+pyinstaller --onefile --windowed --name "PartHive Image Optimizer" --icon=icon.ico --version-file version_info.txt --collect-all tkinterdnd2 --add-data "icon.png;." app.py
