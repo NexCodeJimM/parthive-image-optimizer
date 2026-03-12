@@ -1,0 +1,60 @@
+name: Build Image Optimizer
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build Windows EXE
+        run: |
+          pyinstaller --onefile --windowed --name "PartHive Image Optimizer" --icon=icon.ico --collect-all tkinterdnd2 --add-data "icon.png;." app.py
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/
+
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Convert icon
+        run: |
+          sips -s format icns icon.png --out icon.icns
+
+      - name: Build macOS app
+        run: |
+          pyinstaller --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 app.py
+
+      - name: Upload Mac build
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: dist/
