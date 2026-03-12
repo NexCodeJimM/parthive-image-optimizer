@@ -69,10 +69,14 @@ jobs:
           sips -z 512 512   icon.png --out icon.iconset/icon_512x512.png
           cp icon.png icon.iconset/icon_512x512@2x.png
           iconutil -c icns icon.iconset
-
-      - name: Build macOS APP
+      
+      - name: Clean old build files
         run: |
-          pyinstaller --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 --add-data "icon.png:." app.py
+          rm -rf build dist
+
+      - name: Build macOS app
+        run: |
+          pyinstaller -y --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 --add-data "icon.png:." app.py
 
       - name: Zip macOS app
         run: |

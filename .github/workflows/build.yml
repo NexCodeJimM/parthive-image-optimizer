@@ -49,9 +49,13 @@ jobs:
         run: |
           sips -s format icns icon.png --out icon.icns
 
+      - name: Clean old build files
+        run: |
+          rm -rf build dist
+
       - name: Build macOS app
         run: |
-          pyinstaller --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 app.py
+          pyinstaller -y --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 --add-data "icon.png:." app.py
 
       - name: Upload Mac build
         uses: actions/upload-artifact@v4
