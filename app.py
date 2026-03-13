@@ -12,6 +12,7 @@ Image.MAX_IMAGE_PIXELS = None
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 selected_files = []
 
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -65,6 +66,10 @@ LIGHT_THEME = {
     "DROP_BG": "#f8fafc",
     "RESULT_BG": "#f8fafc",
     "PROGRESS_TROUGH": "#dde5f0",
+    "BUTTON_TEXT_ON_ACCENT": "#ffffff",
+    "BUTTON_TEXT_ON_CARD": "#0f172a",
+    "BUTTON_DISABLED_BG": "#dbe3ef",
+    "BUTTON_DISABLED_TEXT": "#9aa6b2",
 }
 
 DARK_THEME = {
@@ -81,10 +86,150 @@ DARK_THEME = {
     "DROP_BG": "#0b1220",
     "RESULT_BG": "#0b1220",
     "PROGRESS_TROUGH": "#1e293b",
+    "BUTTON_TEXT_ON_ACCENT": "#ffffff",
+    "BUTTON_TEXT_ON_CARD": "#f8fafc",
+    "BUTTON_DISABLED_BG": "#2b3647",
+    "BUTTON_DISABLED_TEXT": "#6b7280",
 }
 
 theme_var = None
 theme = LIGHT_THEME
+
+
+# -----------------------------
+# Custom Button
+# -----------------------------
+class CustomButton(tk.Frame):
+    def __init__(
+        self,
+        parent,
+        text,
+        command,
+        width=None,
+        fill_x=False,
+        variant="secondary",
+        parent_bg=None
+    ):
+        super().__init__(parent, bd=0, highlightthickness=0)
+        self.command = command
+        self.text = text
+        self.variant = variant
+        self.enabled = True
+        self.fill_x = fill_x
+        self.parent_bg = parent_bg if parent_bg is not None else parent.cget("bg")
+
+        self.outer = tk.Frame(self, bd=0, highlightthickness=1)
+        self.outer.pack(fill="x" if fill_x else "none", expand=fill_x)
+
+        self.label = tk.Label(
+            self.outer,
+            text=text,
+            font=("Segoe UI", 10 if variant == "secondary" else 11, "bold"),
+            padx=18,
+            pady=12 if variant == "primary" else 10
+        )
+        self.label.pack(fill="x" if fill_x else "both", expand=fill_x)
+
+        if width is not None and not fill_x:
+            self.label.config(width=width)
+
+        for widget in (self, self.outer, self.label):
+            widget.bind("<Enter>", self._on_enter)
+            widget.bind("<Leave>", self._on_leave)
+            widget.bind("<Button-1>", self._on_click)
+            widget.bind("<ButtonRelease-1>", self._on_release)
+
+        self._hover = False
+        self._pressed = False
+        self.apply_theme()
+
+    def set_parent_bg(self, color):
+        self.parent_bg = color
+        self.configure(bg=color)
+
+    def apply_theme(self):
+        self.configure(bg=self.parent_bg)
+
+        if self.variant == "primary":
+            self.base_bg = theme["ACCENT"]
+            self.hover_bg = theme["ACCENT_HOVER"]
+            self.press_bg = theme["ACCENT_HOVER"]
+            self.text_color = theme["BUTTON_TEXT_ON_ACCENT"]
+            self.border_color = theme["ACCENT"]
+        else:
+            self.base_bg = theme["CARD_2"]
+            self.hover_bg = theme["BORDER"]
+            self.press_bg = theme["BORDER"]
+            self.text_color = theme["BUTTON_TEXT_ON_CARD"]
+            self.border_color = theme["BORDER"]
+
+        self.disabled_bg = theme["BUTTON_DISABLED_BG"]
+        self.disabled_text = theme["BUTTON_DISABLED_TEXT"]
+
+        self._render()
+
+    def _render(self):
+        if not self.enabled:
+            bg = self.disabled_bg
+            fg = self.disabled_text
+            border = theme["BORDER"]
+        else:
+            if self._pressed:
+                bg = self.press_bg
+            elif self._hover:
+                bg = self.hover_bg
+            else:
+                bg = self.base_bg
+            fg = self.text_color
+            border = self.border_color
+
+        self.outer.configure(bg=border, highlightbackground=border)
+        self.label.configure(bg=bg, fg=fg)
+
+    def _on_enter(self, event=None):
+        if not self.enabled:
+            return
+        self._hover = True
+        self._render()
+
+    def _on_leave(self, event=None):
+        if not self.enabled:
+            return
+        self._hover = False
+        self._pressed = False
+        self._render()
+
+    def _on_click(self, event=None):
+        if not self.enabled:
+            return
+        self._pressed = True
+        self._render()
+
+    def _on_release(self, event=None):
+        if not self.enabled:
+            return
+        was_pressed = self._pressed
+        self._pressed = False
+        self._render()
+
+        if was_pressed and self.command:
+            try:
+                x_root = event.x_root if event else None
+                y_root = event.y_root if event else None
+                if x_root is not None and y_root is not None:
+                    widget_under_pointer = self.winfo_containing(x_root, y_root)
+                    if widget_under_pointer not in (self, self.outer, self.label):
+                        return
+            except Exception:
+                pass
+
+            self.command()
+
+    def set_enabled(self, enabled=True):
+        self.enabled = enabled
+        self._hover = False
+        self._pressed = False
+        self._render()
 
 
 def current_theme():
@@ -144,7 +289,13 @@ def apply_theme():
         left_title, left_desc, selected_count_label, files_title,
         right_title, right_desc, preview_title, progress_text_label, status_label
     ]:
-        widget.configure(bg=theme["CARD"], fg=theme["TEXT"] if widget in [left_title, selected_count_label, files_title, right_title, preview_title, status_label] else theme["MUTED"])
+        widget.configure(
+            bg=theme["CARD"],
+            fg=theme["TEXT"] if widget in [
+                left_title, selected_count_label, files_title,
+                right_title, preview_title, status_label
+            ] else theme["MUTED"]
+        )
 
     drop_frame.configure(bg=theme["DROP_BG"], highlightbackground=theme["BORDER"])
     drop_title.configure(bg=theme["DROP_BG"], fg=theme["TEXT"])
@@ -153,11 +304,9 @@ def apply_theme():
     settings_card.configure(bg=theme["DROP_BG"], highlightbackground=theme["BORDER"])
     results_box.configure(bg=theme["RESULT_BG"], highlightbackground=theme["BORDER"])
 
-    # settings labels
     for lbl in settings_labels:
         lbl.configure(bg=theme["DROP_BG"], fg=theme["MUTED"])
 
-    # result labels
     for lbl in result_key_labels:
         lbl.configure(bg=theme["RESULT_BG"], fg=theme["MUTED"])
     for lbl in result_value_labels:
@@ -171,18 +320,12 @@ def apply_theme():
     style_listbox(file_listbox)
     style_listbox(preview_listbox)
 
-    select_button.configure(
-        bg=theme["CARD_2"], fg=theme["TEXT"],
-        activebackground=theme["BORDER"], activeforeground=theme["TEXT"]
-    )
-    clear_button.configure(
-        bg=theme["CARD_2"], fg=theme["TEXT"],
-        activebackground=theme["BORDER"], activeforeground=theme["TEXT"]
-    )
-    optimize_button.configure(
-        bg=theme["ACCENT"], fg="white",
-        activebackground=theme["ACCENT_HOVER"], activeforeground="white"
-    )
+    select_button.set_parent_bg(theme["CARD"])
+    clear_button.set_parent_bg(theme["CARD"])
+    optimize_button.set_parent_bg(theme["CARD"])
+    select_button.apply_theme()
+    clear_button.apply_theme()
+    optimize_button.apply_theme()
 
     theme_toggle.configure(
         bg=theme["BG"],
@@ -335,23 +478,6 @@ def clear_files():
 
 
 # -----------------------------
-# Button hover
-# -----------------------------
-def on_enter_action(button):
-    if button == optimize_button:
-        button.config(bg=theme["ACCENT_HOVER"])
-    else:
-        button.config(bg=theme["BORDER"])
-
-
-def on_leave_action(button):
-    if button == optimize_button:
-        button.config(bg=theme["ACCENT"])
-    else:
-        button.config(bg=theme["CARD_2"])
-
-
-# -----------------------------
 # Main processing
 # -----------------------------
 def optimize_images():
@@ -391,6 +517,8 @@ def optimize_images():
     success_count = 0
     failed_files = []
     total_files = len(selected_files)
+
+    optimize_button.set_enabled(False)
 
     progress_bar["maximum"] = total_files
     progress_bar["value"] = 0
@@ -453,6 +581,8 @@ def optimize_images():
     status_label.config(text="Done")
     root.update_idletasks()
 
+    optimize_button.set_enabled(True)
+
     if failed_files:
         error_text = "\n".join(failed_files[:10])
         messagebox.showwarning(
@@ -487,6 +617,7 @@ try:
     style.theme_use("clam")
 except tk.TclError:
     pass
+
 
 # -----------------------------
 # Main layout
@@ -546,10 +677,22 @@ theme_toggle.pack(side="left")
 content_frame = tk.Frame(main_container, bg=LIGHT_THEME["BG"])
 content_frame.pack(fill="both", expand=True)
 
-left_panel = tk.Frame(content_frame, bg=LIGHT_THEME["CARD"], bd=0, highlightthickness=1, highlightbackground=LIGHT_THEME["BORDER"])
+left_panel = tk.Frame(
+    content_frame,
+    bg=LIGHT_THEME["CARD"],
+    bd=0,
+    highlightthickness=1,
+    highlightbackground=LIGHT_THEME["BORDER"]
+)
 left_panel.pack(side="left", fill="both", expand=True, padx=(0, 12))
 
-right_panel = tk.Frame(content_frame, bg=LIGHT_THEME["CARD"], bd=0, highlightthickness=1, highlightbackground=LIGHT_THEME["BORDER"])
+right_panel = tk.Frame(
+    content_frame,
+    bg=LIGHT_THEME["CARD"],
+    bd=0,
+    highlightthickness=1,
+    highlightbackground=LIGHT_THEME["BORDER"]
+)
 right_panel.pack(side="right", fill="both", expand=True)
 
 # -----------------------------
@@ -558,44 +701,44 @@ right_panel.pack(side="right", fill="both", expand=True)
 left_inner = tk.Frame(left_panel, bg=LIGHT_THEME["CARD"], padx=18, pady=18)
 left_inner.pack(fill="both", expand=True)
 
-left_title = tk.Label(left_inner, text="Upload & Settings", font=("Segoe UI", 14, "bold"), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["TEXT"])
+left_title = tk.Label(
+    left_inner,
+    text="Upload & Settings",
+    font=("Segoe UI", 14, "bold"),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["TEXT"]
+)
 left_title.pack(anchor="w")
 
-left_desc = tk.Label(left_inner, text="Add your files, set the dimensions, rename pattern, and format.", font=("Segoe UI", 10), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["MUTED"])
+left_desc = tk.Label(
+    left_inner,
+    text="Add your files, set the dimensions, rename pattern, and format.",
+    font=("Segoe UI", 10),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["MUTED"]
+)
 left_desc.pack(anchor="w", pady=(4, 16))
 
 button_row = tk.Frame(left_inner, bg=LIGHT_THEME["CARD"])
 button_row.pack(fill="x", pady=(0, 14))
 
-select_button = tk.Button(
+select_button = CustomButton(
     button_row,
     text="Select Images",
     command=select_images,
-    relief="flat",
-    bd=0,
-    padx=16,
-    pady=10,
-    font=("Segoe UI", 10, "bold"),
-    cursor="hand2"
+    variant="secondary",
+    parent_bg=LIGHT_THEME["CARD"]
 )
 select_button.pack(side="left", padx=(0, 10))
-select_button.bind("<Enter>", lambda e: on_enter_action(select_button))
-select_button.bind("<Leave>", lambda e: on_leave_action(select_button))
 
-clear_button = tk.Button(
+clear_button = CustomButton(
     button_row,
     text="Clear Files",
     command=clear_files,
-    relief="flat",
-    bd=0,
-    padx=16,
-    pady=10,
-    font=("Segoe UI", 10, "bold"),
-    cursor="hand2"
+    variant="secondary",
+    parent_bg=LIGHT_THEME["CARD"]
 )
 clear_button.pack(side="left")
-clear_button.bind("<Enter>", lambda e: on_enter_action(clear_button))
-clear_button.bind("<Leave>", lambda e: on_leave_action(clear_button))
 
 drop_frame = tk.Frame(left_inner, height=120, highlightthickness=1)
 drop_frame.pack(fill="x", pady=(0, 14))
@@ -618,7 +761,13 @@ drop_subtitle.place(relx=0.5, rely=0.62, anchor="center")
 drop_frame.drop_target_register(DND_FILES)
 drop_frame.dnd_bind("<<Drop>>", on_drop)
 
-selected_count_label = tk.Label(left_inner, text="No images selected", font=("Segoe UI", 10, "bold"), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["TEXT"])
+selected_count_label = tk.Label(
+    left_inner,
+    text="No images selected",
+    font=("Segoe UI", 10, "bold"),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["TEXT"]
+)
 selected_count_label.pack(anchor="w", pady=(0, 14))
 
 settings_card = tk.Frame(left_inner, highlightthickness=1, padx=14, pady=14)
@@ -680,7 +829,13 @@ format_menu.current(2)
 files_section = tk.Frame(left_inner, bg=LIGHT_THEME["CARD"])
 files_section.pack(fill="both", expand=True, pady=(16, 0))
 
-files_title = tk.Label(files_section, text="Loaded Files", font=("Segoe UI", 12, "bold"), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["TEXT"])
+files_title = tk.Label(
+    files_section,
+    text="Loaded Files",
+    font=("Segoe UI", 12, "bold"),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["TEXT"]
+)
 files_title.pack(anchor="w", pady=(0, 8))
 
 file_list_frame = tk.Frame(files_section, bg=LIGHT_THEME["CARD"])
@@ -704,16 +859,34 @@ file_scrollbar.config(command=file_listbox.yview)
 right_inner = tk.Frame(right_panel, bg=LIGHT_THEME["CARD"], padx=18, pady=18)
 right_inner.pack(fill="both", expand=True)
 
-right_title = tk.Label(right_inner, text="Preview & Results", font=("Segoe UI", 14, "bold"), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["TEXT"])
+right_title = tk.Label(
+    right_inner,
+    text="Preview & Results",
+    font=("Segoe UI", 14, "bold"),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["TEXT"]
+)
 right_title.pack(anchor="w")
 
-right_desc = tk.Label(right_inner, text="Review the final file names and track the optimization progress.", font=("Segoe UI", 10), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["MUTED"])
+right_desc = tk.Label(
+    right_inner,
+    text="Review the final file names and track the optimization progress.",
+    font=("Segoe UI", 10),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["MUTED"]
+)
 right_desc.pack(anchor="w", pady=(4, 16))
 
 preview_section = tk.Frame(right_inner, bg=LIGHT_THEME["CARD"])
 preview_section.pack(fill="both", expand=True)
 
-preview_title = tk.Label(preview_section, text="Final File Name Preview", font=("Segoe UI", 12, "bold"), bg=LIGHT_THEME["CARD"], fg=LIGHT_THEME["TEXT"])
+preview_title = tk.Label(
+    preview_section,
+    text="Final File Name Preview",
+    font=("Segoe UI", 12, "bold"),
+    bg=LIGHT_THEME["CARD"],
+    fg=LIGHT_THEME["TEXT"]
+)
 preview_title.pack(anchor="w", pady=(0, 8))
 
 preview_frame = tk.Frame(preview_section, bg=LIGHT_THEME["CARD"])
@@ -772,20 +945,15 @@ result_value_labels.append(result_count_value)
 action_row = tk.Frame(right_inner, bg=LIGHT_THEME["CARD"])
 action_row.pack(fill="x")
 
-optimize_button = tk.Button(
+optimize_button = CustomButton(
     action_row,
-    text="Optimize, Rename and Save Images",
+    text="Optimize",
     command=optimize_images,
-    relief="flat",
-    bd=0,
-    padx=18,
-    pady=12,
-    font=("Segoe UI", 11, "bold"),
-    cursor="hand2"
+    variant="primary",
+    fill_x=True,
+    parent_bg=LIGHT_THEME["CARD"]
 )
 optimize_button.pack(fill="x")
-optimize_button.bind("<Enter>", lambda e: on_enter_action(optimize_button))
-optimize_button.bind("<Leave>", lambda e: on_leave_action(optimize_button))
 
 progress_wrap = tk.Frame(right_inner, bg=LIGHT_THEME["CARD"])
 progress_wrap.pack(fill="x", pady=(16, 0))
@@ -815,6 +983,7 @@ status_label = tk.Label(
     fg=LIGHT_THEME["TEXT"]
 )
 status_label.pack(anchor="w", pady=(6, 0))
+
 
 # -----------------------------
 # Bindings
