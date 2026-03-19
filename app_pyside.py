@@ -69,6 +69,25 @@ def format_bytes(size: int) -> str:
     return f"{size / (1024 * 1024):.2f} MB"
 
 
+def resize_image_high_quality(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """
+    Resize with high quality while preserving aspect ratio, and allow upscaling.
+    This replaces thumbnail()-based behavior (which never enlarges images).
+    """
+    target_w = max(1, int(target_w))
+    target_h = max(1, int(target_h))
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        return img
+
+    scale = min(target_w / float(src_w), target_h / float(src_h))
+    new_w = max(1, int(round(src_w * scale)))
+    new_h = max(1, int(round(src_h * scale)))
+    if (new_w, new_h) == img.size:
+        return img.copy()
+    return img.resize((new_w, new_h), Image.LANCZOS)
+
+
 def apply_smart_watermark(
     img: Image.Image,
     watermark_file: str | None,
@@ -273,17 +292,38 @@ class DropZone(QFrame):
         self.setObjectName("DropZone")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(6)
+        lay.setSpacing(10)
+        self._layout = lay
         self.title = QLabel("Drag & drop images here")
         self.sub = QLabel("PNG, JPG, JPEG, WEBP, BMP, TIFF")
         self.title.setObjectName("DropTitle")
         self.sub.setObjectName("DropSub")
         self.title.setAlignment(Qt.AlignCenter)
         self.sub.setAlignment(Qt.AlignCenter)
-        lay.addStretch(1)
         lay.addWidget(self.title)
         lay.addWidget(self.sub)
-        lay.addStretch(1)
+
+        # Thumbnail rows are rendered inside the drop-zone for a cleaner,
+        # professional single upload area.
+        self.tiles_host = QWidget()
+        self.tiles_layout = QVBoxLayout(self.tiles_host)
+        self.tiles_layout.setContentsMargins(0, 0, 0, 0)
+        self.tiles_layout.setSpacing(8)
+        self.tiles_scroll = QScrollArea()
+        self.tiles_scroll.setObjectName("DropZoneScroll")
+        self.tiles_scroll.setWidgetResizable(True)
+        self.tiles_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tiles_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.tiles_scroll.setFrameShape(QFrame.NoFrame)
+        self.tiles_scroll.setWidget(self.tiles_host)
+        self.tiles_scroll.setMaximumHeight(280)
+        lay.addWidget(self.tiles_scroll)
+        self.set_empty_mode(True)
+
+    def set_empty_mode(self, is_empty: bool):
+        self.sub.setVisible(is_empty)
+        self.tiles_scroll.setVisible(not is_empty)
+        self.setMinimumHeight(140 if is_empty else 220)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
@@ -509,16 +549,8 @@ class MainWindow(QMainWindow):
         self.drop_zone.filesDropped.connect(self._add_files)
         lay.addWidget(self.drop_zone)
 
-        # Thumbnail grid (scrolls with the column)
-        thumbs_card = QFrame()
-        thumbs_card.setObjectName("ThumbsCard")
-        self.thumbs_card = thumbs_card
-        thumbs_layout = QGridLayout(thumbs_card)
-        thumbs_layout.setContentsMargins(6, 10, 6, 10)
-        thumbs_layout.setHorizontalSpacing(8)
-        thumbs_layout.setVerticalSpacing(8)
-        self.thumbs_layout = thumbs_layout
-        lay.addWidget(thumbs_card)
+        # Thumbnail grid lives inside the drag-and-drop zone.
+        self.thumbs_layout = self.drop_zone.tiles_layout
 
         btn_row = QHBoxLayout()
         self.select_btn = QPushButton("Select Images")
@@ -786,6 +818,42 @@ class MainWindow(QMainWindow):
                 QFrame#DropZone { background:#0f172a; border:1px dashed #334155; border-radius:14px; }
                 QLabel#DropTitle { color:#e5e7eb; font-size:14px; font-weight:700; }
                 QLabel#DropSub { color:#9fb0cc; }
+                QScrollArea#DropZoneScroll {
+                  background:#0f172a;
+                  border:1px solid #2a3a59;
+                  border-radius:12px;
+                }
+                QScrollArea#DropZoneScroll > QWidget#qt_scrollarea_viewport {
+                  background:#0f172a;
+                  border-radius:12px;
+                }
+                QScrollArea#DropZoneScroll QWidget { background: transparent; }
+                QScrollBar:vertical {
+                  background:#16233d;
+                  width:12px;
+                  margin:4px;
+                  border-radius:6px;
+                }
+                QScrollBar::handle:vertical {
+                  background:#3b4f78;
+                  min-height:24px;
+                  border-radius:6px;
+                }
+                QScrollBar::handle:vertical:hover { background:#4b6496; }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                  background: transparent;
+                  border: none;
+                  height: 0px;
+                }
+                QFrame#ThumbRow { background:#111a2e; border:1px solid #2a3a59; border-radius:10px; }
+                QFrame#ThumbRow QLabel { background: transparent; border: none; }
+                QFrame#ThumbRow QToolButton {
+                  background: transparent; border: none; color:#cbd5e1;
+                  padding: 0px; font-size:16px; min-width: 20px; min-height: 20px;
+                }
+                QFrame#ThumbRow QToolButton:hover { color:#f87171; }
+                QPushButton#ThumbAddButton { min-height: 42px; font-size: 16px; font-weight: 600; border-radius: 14px; }
                 """
             )
         else:
@@ -866,6 +934,42 @@ class MainWindow(QMainWindow):
                 QFrame#DropZone { background:#f5f8ff; border:1px dashed #d0dbf0; border-radius:14px; }
                 QLabel#DropTitle { color:#0b1220; font-size:14px; font-weight:700; }
                 QLabel#DropSub { color:#5c6a84; }
+                QScrollArea#DropZoneScroll {
+                  background:#f5f8ff;
+                  border:1px solid #d9e2f2;
+                  border-radius:12px;
+                }
+                QScrollArea#DropZoneScroll > QWidget#qt_scrollarea_viewport {
+                  background:#f5f8ff;
+                  border-radius:12px;
+                }
+                QScrollArea#DropZoneScroll QWidget { background: transparent; }
+                QScrollBar:vertical {
+                  background:#e6edf8;
+                  width:12px;
+                  margin:4px;
+                  border-radius:6px;
+                }
+                QScrollBar::handle:vertical {
+                  background:#b8c7e6;
+                  min-height:24px;
+                  border-radius:6px;
+                }
+                QScrollBar::handle:vertical:hover { background:#9eb3da; }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                  background: transparent;
+                  border: none;
+                  height: 0px;
+                }
+                QFrame#ThumbRow { background:#ffffff; border:1px solid #d9e2f2; border-radius:10px; }
+                QFrame#ThumbRow QLabel { background: transparent; border: none; }
+                QFrame#ThumbRow QToolButton {
+                  background: transparent; border: none; color:#64748b;
+                  padding: 0px; font-size:16px; min-width: 20px; min-height: 20px;
+                }
+                QFrame#ThumbRow QToolButton:hover { color:#dc2626; }
+                QPushButton#ThumbAddButton { min-height: 42px; font-size: 16px; font-weight: 600; border-radius: 14px; }
                 """
             )
 
@@ -880,6 +984,19 @@ class MainWindow(QMainWindow):
             self.status_chip.setText("Ready")
             self.status_chip.setStyleSheet("background:#1f2a45;color:#b8c7e6;border-radius:10px;padding:6px 12px;font-weight:600;")
 
+    def _elide_filename(self, filename: str, max_stem: int = 18) -> str:
+        stem, ext = os.path.splitext(filename)
+        if len(stem) <= max_stem:
+            return filename
+        return f"{stem[:max_stem]}...{ext.lstrip('.')}"
+
+    def _refresh_preview_combo(self):
+        self.preview_combo.clear()
+        for f in self.selected_files:
+            base = os.path.basename(f)
+            self.preview_combo.addItem(self._elide_filename(base))
+            self.preview_combo.setItemData(self.preview_combo.count() - 1, base, Qt.ToolTipRole)
+
     def select_images(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select images", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tiff)")
         self._add_files([f for f in files if Path(f).suffix.lower() in SUPPORTED_EXTENSIONS])
@@ -893,8 +1010,7 @@ class MainWindow(QMainWindow):
             if f not in existing:
                 self.selected_files.append(f)
                 existing.add(f)
-        self.preview_combo.clear()
-        self.preview_combo.addItems([os.path.basename(f) for f in self.selected_files])
+        self._refresh_preview_combo()
         self._rebuild_thumbnails()
         self.update_name_preview()
         self.update_preview()
@@ -911,6 +1027,8 @@ class MainWindow(QMainWindow):
         self.preview_combo.clear()
         self.name_preview.clear()
         self.preview.clear()
+        self.drop_zone.set_empty_mode(True)
+        self._last_thumb_cols = 0
         self._set_status("ready")
 
     def _rebuild_thumbnails(self):
@@ -923,84 +1041,70 @@ class MainWindow(QMainWindow):
 
         if not self.selected_files:
             self._last_thumb_cols = 0
-            # Reset/collapse card size when empty.
-            self.thumbs_card.setFixedHeight(84)
-            empty = QLabel("No images added yet. Use drag-and-drop or Select Images.")
-            empty.setAlignment(Qt.AlignCenter)
-            empty.setWordWrap(True)
-            self.thumbs_layout.addWidget(empty, 0, 0)
+            self.drop_zone.set_empty_mode(True)
             return
 
-        # Responsive columns based on available card width.
-        available_w = max(240, self.thumbs_card.width() - 20)
-        cols = max(1, min(4, available_w // 150))
-        self._last_thumb_cols = cols
+        self.drop_zone.set_empty_mode(False)
+        self._last_thumb_cols = 1
 
         for idx, path in enumerate(self.selected_files):
-            row, col = divmod(idx, cols)
-            tile = QFrame()
-            tile.setObjectName("ThumbTile")
-            tile.setFixedHeight(132)
-            tile_layout = QVBoxLayout(tile)
-            tile_layout.setContentsMargins(6, 6, 6, 6)
+            row = QFrame()
+            row.setObjectName("ThumbRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(10, 8, 10, 8)
+            row_layout.setSpacing(10)
+
             thumb_label = QLabel()
             thumb_label.setAlignment(Qt.AlignCenter)
-            thumb_label.setFixedSize(120, 80)
+            thumb_label.setFixedSize(60, 60)
             try:
                 with Image.open(path) as im:
                     im.thumbnail((180, 120), Image.LANCZOS)
                     qimg = QImage(ImageQt(im).copy())
-                    thumb_label.setPixmap(QPixmap.fromImage(qimg).scaled(120, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    thumb_label.setPixmap(QPixmap.fromImage(qimg).scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             except Exception:
-                thumb_label.setText("Preview\nunavailable")
-            name_label = QLabel(os.path.basename(path))
-            name_label.setAlignment(Qt.AlignCenter)
-            name_label.setWordWrap(True)
+                thumb_label.setText("N/A")
+            full_name = os.path.basename(path)
+            name_label = QLabel(self._elide_filename(full_name, max_stem=14))
+            name_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            name_label.setWordWrap(False)
+            name_label.setFixedHeight(20)
+            name_label.setToolTip(full_name)
 
             close_btn = QToolButton()
             close_btn.setText("✕")
             close_btn.setAutoRaise(True)
+            close_btn.setCursor(Qt.PointingHandCursor)
+            close_btn.setToolTip("Remove")
             close_btn.clicked.connect(lambda _, p=path: self._remove_file(p))
 
-            top_row = QHBoxLayout()
-            top_row.addWidget(close_btn, 0, Qt.AlignRight)
-            top_row.addStretch(1)
-            tile_layout.addLayout(top_row)
-            tile_layout.addWidget(thumb_label)
-            tile_layout.addWidget(name_label)
+            row_layout.addWidget(thumb_label, 0, Qt.AlignVCenter)
+            row_layout.addWidget(name_label, 1)
+            row_layout.addWidget(close_btn, 0, Qt.AlignVCenter)
+            self.thumbs_layout.addWidget(row)
 
-            self.thumbs_layout.addWidget(tile, row, col)
-
-        # "Add more" tile
+        # "Add more" button
         add_tile = QPushButton("+ Add more")
+        add_tile.setObjectName("ThumbAddButton")
         add_tile.clicked.connect(self.select_images)
-        add_row = (len(self.selected_files) // cols) + 1
-        self.thumbs_layout.addWidget(add_tile, add_row, 0, 1, max(1, cols))
+        self.thumbs_layout.addWidget(add_tile)
+        self.thumbs_layout.addStretch(1)
 
-        # Fit the card height to its content so it expands/contracts naturally.
-        rows = add_row + 1
-        target_h = 20 + rows * 140
-        target_h = max(84, min(target_h, 520))
-        self.thumbs_card.setFixedHeight(target_h)
+        # Let the drop-zone expand naturally with content and scroll area.
+        self.drop_zone.updateGeometry()
 
     def _remove_file(self, path: str):
         if path in self.selected_files:
             self.selected_files.remove(path)
         self.manual_positions_by_path.pop(path, None)
-        self.preview_combo.clear()
-        self.preview_combo.addItems([os.path.basename(f) for f in self.selected_files])
+        self._refresh_preview_combo()
         self._rebuild_thumbnails()
         self.update_name_preview()
         self.update_preview()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Reflow thumbnail grid when width changes enough to affect column count.
-        if hasattr(self, "thumbs_card") and self.selected_files:
-            available_w = max(240, self.thumbs_card.width() - 20)
-            cols = max(1, min(4, available_w // 150))
-            if cols != self._last_thumb_cols:
-                self._rebuild_thumbnails()
+        # List-style thumbnail rows do not need reflow on resize.
 
     def select_watermark(self):
         file, _ = QFileDialog.getOpenFileName(self, "Select watermark", "", "Images (*.png *.jpg *.jpeg *.webp)")
@@ -1055,8 +1159,8 @@ class MainWindow(QMainWindow):
         except Exception:
             w, h = 800, 600
         with Image.open(path) as im:
-            im.thumbnail((w, h), Image.LANCZOS)
-            target = im.convert("RGBA")
+            resized = resize_image_high_quality(im, w, h)
+            target = resized.convert("RGBA")
         tw, th = target.size
 
         subject_mask, xmin, xmax, ymin, ymax = estimate_subject_mask_and_bbox(target)
@@ -1188,7 +1292,7 @@ class MainWindow(QMainWindow):
             try:
                 total_before += os.path.getsize(file_path)
                 with Image.open(file_path) as img:
-                    img.thumbnail((width, height), Image.LANCZOS)
+                    img = resize_image_high_quality(img, width, height)
                     if self.enable_wm.isChecked() and self.watermark_path:
                         manual_positions = self.manual_positions_by_path.get(file_path) if self.manual_wm.isChecked() else None
                         img = apply_smart_watermark(
