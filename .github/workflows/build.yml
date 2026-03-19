@@ -20,6 +20,13 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      - name: Create Windows ICO from icon.png
+        shell: python
+        run: |
+          from PIL import Image
+          img = Image.open("icon.png").convert("RGBA")
+          img.save("icon.ico", format="ICO", sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
+
       - name: Clean old build files
         run: |
           if exist build rmdir /s /q build
@@ -28,7 +35,7 @@ jobs:
 
       - name: Build Windows EXE
         run: |
-          pyinstaller -y --onefile --windowed --name "PartHive Image Optimizer" --icon=icon.ico --collect-all tkinterdnd2 --add-data "icon.png;." app.py
+          pyinstaller -y --onefile --windowed --clean --name "PartHive Image Optimizer" --icon=icon.ico --collect-all PySide6 --add-data "icon.png;." main.py
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
@@ -74,7 +81,7 @@ jobs:
 
       - name: Build macOS app
         run: |
-          pyinstaller -y --windowed --name "PartHive Image Optimizer" --icon=icon.icns --collect-all tkinterdnd2 --add-data "icon.png:." app.py
+          pyinstaller -y --windowed --clean --name "PartHive Image Optimizer" --icon=icon.icns --collect-all PySide6 --add-data "icon.png:." main.py
 
       - name: Upload Mac build
         uses: actions/upload-artifact@v4

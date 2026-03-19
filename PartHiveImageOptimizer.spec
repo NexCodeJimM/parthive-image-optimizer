@@ -4,12 +4,12 @@ from PyInstaller.utils.hooks import collect_all
 datas = [('icon.png', '.')]
 binaries = []
 hiddenimports = []
-tmp_ret = collect_all('tkinterdnd2')
+tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['app.py'],
+    ['main.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -42,5 +42,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    # PyInstaller icon expects .ico/.icns; we only keep icon.png in repo.
+    # We'll let bundlers default the executable icon for now.
 )

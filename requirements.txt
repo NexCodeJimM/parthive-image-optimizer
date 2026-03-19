@@ -1,3 +1,5 @@
 pillow
 tkinterdnd2
 pyinstaller
+numpy
+PySide6
