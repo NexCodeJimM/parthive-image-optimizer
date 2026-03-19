@@ -77,6 +77,7 @@ def apply_smart_watermark(
     size_fraction: float = 0.12,
     manual_positions_rel: list[tuple[float, float]] | None = None,
     rng: random.Random | None = None,
+    strict_subject_only: bool = False,
 ) -> Image.Image:
     if not watermark_file:
         return img
@@ -136,9 +137,13 @@ def apply_smart_watermark(
     alpha = wm.split()[3].point(lambda p: int(p * float(opacity)))
     wm.putalpha(alpha)
 
-    def subject_ok(x: int, y: int) -> bool:
+    strict_thr = 0.55 if strict_subject_only else 0.38
+    manual_thr = 0.45 if strict_subject_only else 0.35
+    relaxed_thr = 0.42 if strict_subject_only else 0.28
+
+    def subject_ok(x: int, y: int, threshold: float = strict_thr) -> bool:
         region = subject_mask[y : y + wm_h, x : x + wm_w]
-        return region.size > 0 and float(region.mean()) >= 0.6
+        return region.size > 0 and float(region.mean()) >= threshold
 
     result = base.copy()
     if manual_positions_rel:
@@ -147,7 +152,29 @@ def apply_smart_watermark(
             y = int(max(0.0, min(1.0, yr)) * h)
             x = max(xmin, min(x, xmax - wm_w + 1))
             y = max(ymin, min(y, ymax - wm_h + 1))
-            if subject_ok(x, y):
+            if not subject_ok(x, y, threshold=manual_thr):
+                # Grill-heavy/complex textures can have holes in the mask.
+                # Try to find a nearby acceptable position first.
+                best = None
+                best_d = None
+                radius = max(16, int(min(w, h) * 0.08))
+                for _ in range(120):
+                    x_try = max(xmin, min(xmax - wm_w + 1, x + int(rng.uniform(-radius, radius))))
+                    y_try = max(ymin, min(ymax - wm_h + 1, y + int(rng.uniform(-radius, radius))))
+                    if subject_ok(x_try, y_try, threshold=relaxed_thr):
+                        d = abs(x_try - x) + abs(y_try - y)
+                        if best is None or d < best_d:
+                            best = (x_try, y_try)
+                            best_d = d
+                            if d == 0:
+                                break
+                if best is not None:
+                    x, y = best
+            # In flexible mode, always paste after clamping; user's intent wins.
+            if strict_subject_only:
+                if subject_ok(x, y, threshold=manual_thr):
+                    result.paste(wm, (x, y), wm)
+            else:
                 result.paste(wm, (x, y), wm)
         return result
 
@@ -156,22 +183,33 @@ def apply_smart_watermark(
     gap = max(8, min(int(min(w, h) * 0.04), 60))
     for _ in range(count):
         placed_this = False
-        for _ in range(220):
-            x = rng.randint(xmin, max(xmin, xmax - wm_w + 1))
-            y = rng.randint(ymin, max(ymin, ymax - wm_h + 1))
-            if not subject_ok(x, y):
+        # Progressive attempts: strict -> relaxed -> bbox fallback.
+        attempts = [
+            (220, strict_thr, gap),                      # subject + normal spacing
+            (180, relaxed_thr, max(4, int(gap * 0.7))), # relaxed subject + tighter spacing
+            (120, -1.0, 0),                               # bbox-only fallback (flex mode only)
+        ]
+        for max_tries, subject_thr, gap_thr in attempts:
+            if strict_subject_only and subject_thr < 0:
                 continue
-            overlap = False
-            for px, py, pw, ph in placed:
-                if not (x + wm_w + gap < px or x > px + pw + gap or y + wm_h + gap < py or y > py + ph + gap):
-                    overlap = True
-                    break
-            if overlap:
-                continue
-            result.paste(wm, (x, y), wm)
-            placed.append((x, y, wm_w, wm_h))
-            placed_this = True
-            break
+            for _ in range(max_tries):
+                x = rng.randint(xmin, max(xmin, xmax - wm_w + 1))
+                y = rng.randint(ymin, max(ymin, ymax - wm_h + 1))
+                if subject_thr >= 0 and not subject_ok(x, y, threshold=subject_thr):
+                    continue
+                overlap = False
+                for px, py, pw, ph in placed:
+                    if not (x + wm_w + gap_thr < px or x > px + pw + gap_thr or y + wm_h + gap_thr < py or y > py + ph + gap_thr):
+                        overlap = True
+                        break
+                if overlap:
+                    continue
+                result.paste(wm, (x, y), wm)
+                placed.append((x, y, wm_w, wm_h))
+                placed_this = True
+                break
+            if placed_this:
+                break
         if not placed_this:
             break
     return result
@@ -374,8 +412,8 @@ class PreviewWidget(QLabel):
             region = self._subject_mask[y : y + wm_h, x : x + wm_w]
             if region.size == 0:
                 return
-            # Require coverage only if we have enough subject pixels.
-            if float(region.mean()) < self._min_subject_coverage:
+            # For grill/textured objects, allow reduced threshold so drag doesn't feel stuck.
+            if float(region.mean()) < 0.18:
                 return
             rx = x / max(1, w)
             ry = y / max(1, h)
@@ -400,6 +438,7 @@ class MainWindow(QMainWindow):
         self.selected_files: list[str] = []
         self.watermark_path: str | None = None
         self.manual_positions_by_path: dict[str, list[tuple[float, float]]] = {}
+        self._last_thumb_cols = 0
         self._build_ui()
         self._apply_styles()
 
@@ -473,6 +512,7 @@ class MainWindow(QMainWindow):
         # Thumbnail grid (scrolls with the column)
         thumbs_card = QFrame()
         thumbs_card.setObjectName("ThumbsCard")
+        self.thumbs_card = thumbs_card
         thumbs_layout = QGridLayout(thumbs_card)
         thumbs_layout.setContentsMargins(6, 10, 6, 10)
         thumbs_layout.setHorizontalSpacing(8)
@@ -555,10 +595,14 @@ class MainWindow(QMainWindow):
         lay.addWidget(QLabel("◉ Watermark Studio"))
         self.enable_wm = QCheckBox("Enable watermark")
         self.manual_wm = QCheckBox("Manual placement")
+        self.strict_subject_toggle = QCheckBox("Strict subject only")
+        self.strict_subject_toggle.setChecked(False)  # default = flexible placement
         self.enable_wm.toggled.connect(self.update_preview)
         self.manual_wm.toggled.connect(self.update_preview)
+        self.strict_subject_toggle.toggled.connect(self.update_preview)
         lay.addWidget(self.enable_wm)
         lay.addWidget(self.manual_wm)
+        lay.addWidget(self.strict_subject_toggle)
         self.upload_wm_btn = QPushButton("Upload Watermark")
         self.upload_wm_btn.clicked.connect(self.select_watermark)
         self.wm_name = QLabel("No watermark selected")
@@ -878,13 +922,25 @@ class MainWindow(QMainWindow):
                 w.deleteLater()
 
         if not self.selected_files:
+            self._last_thumb_cols = 0
+            # Reset/collapse card size when empty.
+            self.thumbs_card.setFixedHeight(84)
+            empty = QLabel("No images added yet. Use drag-and-drop or Select Images.")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setWordWrap(True)
+            self.thumbs_layout.addWidget(empty, 0, 0)
             return
 
-        cols = 3
+        # Responsive columns based on available card width.
+        available_w = max(240, self.thumbs_card.width() - 20)
+        cols = max(1, min(4, available_w // 150))
+        self._last_thumb_cols = cols
+
         for idx, path in enumerate(self.selected_files):
             row, col = divmod(idx, cols)
             tile = QFrame()
             tile.setObjectName("ThumbTile")
+            tile.setFixedHeight(132)
             tile_layout = QVBoxLayout(tile)
             tile_layout.setContentsMargins(6, 6, 6, 6)
             thumb_label = QLabel()
@@ -918,7 +974,14 @@ class MainWindow(QMainWindow):
         # "Add more" tile
         add_tile = QPushButton("+ Add more")
         add_tile.clicked.connect(self.select_images)
-        self.thumbs_layout.addWidget(add_tile, (len(self.selected_files) // cols) + 1, 0)
+        add_row = (len(self.selected_files) // cols) + 1
+        self.thumbs_layout.addWidget(add_tile, add_row, 0, 1, max(1, cols))
+
+        # Fit the card height to its content so it expands/contracts naturally.
+        rows = add_row + 1
+        target_h = 20 + rows * 140
+        target_h = max(84, min(target_h, 520))
+        self.thumbs_card.setFixedHeight(target_h)
 
     def _remove_file(self, path: str):
         if path in self.selected_files:
@@ -929,6 +992,15 @@ class MainWindow(QMainWindow):
         self._rebuild_thumbnails()
         self.update_name_preview()
         self.update_preview()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Reflow thumbnail grid when width changes enough to affect column count.
+        if hasattr(self, "thumbs_card") and self.selected_files:
+            available_w = max(240, self.thumbs_card.width() - 20)
+            cols = max(1, min(4, available_w // 150))
+            if cols != self._last_thumb_cols:
+                self._rebuild_thumbnails()
 
     def select_watermark(self):
         file, _ = QFileDialog.getOpenFileName(self, "Select watermark", "", "Images (*.png *.jpg *.jpeg *.webp)")
@@ -1026,6 +1098,7 @@ class MainWindow(QMainWindow):
                     self.opacity_slider.value() / 100.0,
                     size_fraction=self.size_slider.value() / 100.0,
                     rng=rng_preview,
+                    strict_subject_only=self.strict_subject_toggle.isChecked(),
                 )
                 disp = composed.copy()
         else:
@@ -1125,6 +1198,7 @@ class MainWindow(QMainWindow):
                             self.opacity_slider.value() / 100.0,
                             size_fraction=self.size_slider.value() / 100.0,
                             manual_positions_rel=manual_positions,
+                            strict_subject_only=self.strict_subject_toggle.isChecked(),
                         )
                     name = f"{base}-{i}"
                     if fmt == "JPG":
