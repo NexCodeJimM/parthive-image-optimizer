@@ -8,8 +8,28 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDragEnterEvent,
+    QDropEvent,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPalette,
+    QPen,
+    QPixmap,
+    QPolygon,
+)
+
+Image.MAX_IMAGE_PIXELS = None
+SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+
+from updater import run_manual_update_check, schedule_update_check
+from version import __version__
+
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -23,21 +43,86 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QMainWindow,
+    QMenu,
     QMessageBox,
+    QProxyStyle,
     QPushButton,
     QProgressBar,
     QScrollArea,
     QSlider,
     QSpinBox,
     QSplitter,
+    QStyle,
+    QStyleFactory,
+    QStyleOptionComboBox,
+    QStyleOptionSpinBox,
     QToolButton,
     QVBoxLayout,
     QSizePolicy,
     QWidget,
 )
 
-Image.MAX_IMAGE_PIXELS = None
-SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+
+class PartHiveProxyStyle(QProxyStyle):
+    """
+    Fusion + global QSS often fails to paint combo/spin indicators (or QSS `image:` is ignored).
+    Draw clear vector chevrons on top of the base style.
+    """
+
+    def drawComplexControl(self, cc, opt, painter, widget=None):
+        if cc == QStyle.ComplexControl.CC_ComboBox and isinstance(opt, QStyleOptionComboBox) and isinstance(widget, QComboBox):
+            opt_no_arrow = QStyleOptionComboBox(opt)
+            opt_no_arrow.subControls = opt.subControls & ~QStyle.SubControl.SC_ComboBoxArrow
+            super().drawComplexControl(cc, opt_no_arrow, painter, widget)
+            if opt.subControls & QStyle.SubControl.SC_ComboBoxArrow:
+                r = self.subControlRect(cc, opt, QStyle.SubControl.SC_ComboBoxArrow, widget)
+                if r.isValid():
+                    c = self._arrow_color(opt)
+                    self._paint_chevron(painter, r, down=True, color=c)
+            return
+
+        if cc == QStyle.ComplexControl.CC_SpinBox and isinstance(opt, QStyleOptionSpinBox) and isinstance(widget, QSpinBox):
+            opt_no_arrows = QStyleOptionSpinBox(opt)
+            opt_no_arrows.subControls = opt.subControls & ~(
+                QStyle.SubControl.SC_SpinBoxUp | QStyle.SubControl.SC_SpinBoxDown
+            )
+            super().drawComplexControl(cc, opt_no_arrows, painter, widget)
+            if opt.subControls & QStyle.SubControl.SC_SpinBoxUp:
+                r = self.subControlRect(cc, opt, QStyle.SubControl.SC_SpinBoxUp, widget)
+                if r.isValid():
+                    self._paint_chevron(painter, r, down=False, color=self._arrow_color(opt))
+            if opt.subControls & QStyle.SubControl.SC_SpinBoxDown:
+                r = self.subControlRect(cc, opt, QStyle.SubControl.SC_SpinBoxDown, widget)
+                if r.isValid():
+                    self._paint_chevron(painter, r, down=True, color=self._arrow_color(opt))
+            return
+
+        super().drawComplexControl(cc, opt, painter, widget)
+
+    @staticmethod
+    def _arrow_color(opt) -> QColor:
+        if opt.state & QStyle.StateFlag.State_Enabled:
+            return opt.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText)
+        return opt.palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText)
+
+    @staticmethod
+    def _paint_chevron(painter: QPainter, rect: QRect, *, down: bool, color: QColor) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(color)
+        pen.setWidthF(2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        cx = rect.center().x()
+        cy = rect.center().y()
+        if down:
+            painter.drawLine(cx - 4, cy - 2, cx, cy + 3)
+            painter.drawLine(cx, cy + 3, cx + 4, cy - 2)
+        else:
+            painter.drawLine(cx - 4, cy + 2, cx, cy - 3)
+            painter.drawLine(cx, cy - 3, cx + 4, cy + 2)
+        painter.restore()
 
 
 def _load_app_icon() -> QIcon | None:
@@ -470,7 +555,7 @@ class PreviewWidget(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Part Hive Image Optimizer - PySide")
+        self.setWindowTitle(f"Part Hive Image Optimizer — v{__version__}")
         icon = _load_app_icon()
         if icon is not None:
             self.setWindowIcon(icon)
@@ -479,8 +564,55 @@ class MainWindow(QMainWindow):
         self.watermark_path: str | None = None
         self.manual_positions_by_path: dict[str, list[tuple[float, float]]] = {}
         self._last_thumb_cols = 0
+        self._build_menu_bar()
         self._build_ui()
         self._apply_styles()
+
+    def _build_menu_bar(self):
+        # Native menu bar (macOS menu bar / Windows in-window menubar).
+        bar = self.menuBar()
+        file_menu = bar.addMenu("&File")
+        close_act = QAction("&Close", self)
+        close_act.setShortcuts([QKeySequence.StandardKey.Close])
+        close_act.setMenuRole(QAction.MenuRole.NoRole)
+        close_act.triggered.connect(self.close)
+        file_menu.addAction(close_act)
+
+        tools_menu = bar.addMenu("&Tools")
+        upd_act = QAction("&Update checker…", self)
+        upd_act.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        upd_act.triggered.connect(lambda: run_manual_update_check(self))
+        tools_menu.addAction(upd_act)
+
+        help_menu = bar.addMenu("&Help")
+        ver_act = QAction("&Version information…", self)
+        ver_act.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        ver_act.triggered.connect(self._show_version_information)
+        help_menu.addAction(ver_act)
+
+    def _show_version_information(self):
+        try:
+            import PySide6
+
+            qt_info = PySide6.__version__
+        except Exception:
+            qt_info = ""
+        lines = [
+            "Part Hive Image Optimizer",
+            "",
+            f"Version: {__version__}",
+        ]
+        if qt_info:
+            lines.append(f"PySide6: {qt_info}")
+        lines.extend(
+            [
+                "",
+                "Resize, convert, and watermark product images.",
+                "",
+                f"Python: {sys.version.split()[0]}",
+            ]
+        )
+        QMessageBox.about(self, "Version information", "\n".join(lines))
 
     def _build_ui(self):
         root = QWidget()
@@ -739,7 +871,7 @@ class MainWindow(QMainWindow):
             dark = True
 
         if dark:
-            self.setStyleSheet(
+            dark_sheet = (
                 """
                 QWidget { color:#e5e7eb; font-family: Arial, Helvetica, 'Segoe UI'; font-size:13px; }
                 QMainWindow { background:#0b1020; }
@@ -770,14 +902,6 @@ class MainWindow(QMainWindow):
                   border-top: 0px;
                   border-bottom: 0px;
                 }
-                QComboBox::down-arrow {
-                  width: 10px;
-                  height: 10px;
-                  border-left: 5px solid transparent;
-                  border-right: 5px solid transparent;
-                  border-top: 6px solid #e5e7eb;
-                  background: transparent;
-                }
                 QSpinBox {
                   border-radius:10px;
                   padding-right: 30px;
@@ -797,20 +921,6 @@ class MainWindow(QMainWindow):
                   border-left: 1px solid #2a3a59;
                   border-bottom-right-radius: 10px;
                   background: #0f172a;
-                }
-                QSpinBox::up-arrow {
-                  width: 0px;
-                  height: 0px;
-                  border-left: 4px solid transparent;
-                  border-right: 4px solid transparent;
-                  border-bottom: 6px solid #e5e7eb;
-                }
-                QSpinBox::down-arrow {
-                  width: 0px;
-                  height: 0px;
-                  border-left: 4px solid transparent;
-                  border-right: 4px solid transparent;
-                  border-top: 6px solid #e5e7eb;
                 }
                 QProgressBar { border:1px solid #2a3a59; border-radius:10px; text-align:center; background:#0f172a; }
                 QProgressBar::chunk { background:#6366f1; border-radius:10px; }
@@ -856,8 +966,9 @@ class MainWindow(QMainWindow):
                 QPushButton#ThumbAddButton { min-height: 42px; font-size: 16px; font-weight: 600; border-radius: 14px; }
                 """
             )
+            self.setStyleSheet(dark_sheet)
         else:
-            self.setStyleSheet(
+            light_sheet = (
                 """
                 QWidget { color:#0b1220; font-family: Arial, Helvetica, 'Segoe UI'; font-size:13px; }
                 QMainWindow { background:#eef2f8; }
@@ -886,14 +997,6 @@ class MainWindow(QMainWindow):
                   border-bottom-right-radius: 10px;
                   background: #ffffff;
                 }
-                QComboBox::down-arrow {
-                  width: 10px;
-                  height: 10px;
-                  border-left: 5px solid transparent;
-                  border-right: 5px solid transparent;
-                  border-top: 6px solid #0b1220;
-                  background: transparent;
-                }
                 QSpinBox {
                   border-radius:10px;
                   padding-right: 30px;
@@ -913,20 +1016,6 @@ class MainWindow(QMainWindow):
                   border-left: 1px solid #d9e2f2;
                   border-bottom-right-radius: 10px;
                   background: #ffffff;
-                }
-                QSpinBox::up-arrow {
-                  width: 0px;
-                  height: 0px;
-                  border-left: 4px solid transparent;
-                  border-right: 4px solid transparent;
-                  border-bottom: 6px solid #0b1220;
-                }
-                QSpinBox::down-arrow {
-                  width: 0px;
-                  height: 0px;
-                  border-left: 4px solid transparent;
-                  border-right: 4px solid transparent;
-                  border-top: 6px solid #0b1220;
                 }
                 QProgressBar { border:1px solid #d9e2f2; border-radius:10px; text-align:center; background:#ffffff; }
                 QProgressBar::chunk { background:#4f46e5; border-radius:10px; }
@@ -972,6 +1061,22 @@ class MainWindow(QMainWindow):
                 QPushButton#ThumbAddButton { min-height: 42px; font-size: 16px; font-weight: 600; border-radius: 14px; }
                 """
             )
+            self.setStyleSheet(light_sheet)
+
+        self._sync_control_palettes(dark)
+
+    def _sync_control_palettes(self, dark: bool):
+        """Chevrons use Palette ButtonText (drawn by PartHiveProxyStyle); keep contrast vs drop-down bg."""
+        fg = QColor("#e5e7eb") if dark else QColor("#0b1220")
+        for w in (self.format_combo, self.preview_combo, self.count_spin):
+            pal = w.palette()
+            for cg in (
+                QPalette.ColorGroup.Active,
+                QPalette.ColorGroup.Inactive,
+                QPalette.ColorGroup.Disabled,
+            ):
+                pal.setColor(cg, QPalette.ColorRole.ButtonText, fg)
+            w.setPalette(pal)
 
     def _set_status(self, state: str):
         if state == "processing":
@@ -1331,14 +1436,21 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    # Use Fusion for consistent subcontrol rendering (combobox/spinbox arrows)
-    # across platforms, especially macOS where native style can ignore QSS pieces.
-    app.setStyle("Fusion")
+    app.setOrganizationName("PartHive")
+    app.setApplicationName("ImageOptimizer")
+    # Wrap Fusion so combo/spin chevrons are always painted (QSS `image:` is unreliable).
+    base = QStyleFactory.create("Fusion")
+    if base is not None:
+        app.setStyle(PartHiveProxyStyle(base))
+    else:
+        app.setStyle("Fusion")
     icon = _load_app_icon()
     if icon is not None:
         app.setWindowIcon(icon)
     window = MainWindow()
     window.show()
+    # Background check for GitHub release (frozen builds only; see version.py).
+    QTimer.singleShot(4000, lambda: schedule_update_check(window))
     sys.exit(app.exec())
 
 
